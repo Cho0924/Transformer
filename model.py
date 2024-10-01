@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import math
 
-class InputEmbeddings(nn.Module):
+class  (nn.Module):
     def __init__(self, d_model: int, vocab_size: int):
         super().__init__()
         self.d_model = d_model
@@ -132,6 +132,7 @@ class ResidualConnection(nn.Module):
         # Also, recall that sublayer(x) automatically calls the forward method in the sublayer class
         return x + self.dropout(sublayer(self.norm(x))) 
 
+
 class EncoderBlock(nn.Module):
     def __init__(self, self_attention_block: MultiHeadAttentionBlock, feed_forward_block: FeedForwardBlock, dropout: float) -> None:
         super().__init__()
@@ -147,4 +148,58 @@ class EncoderBlock(nn.Module):
         x = self.residual_connections[1](x, self.feed_forward_block)
         return x
         
+
+class Encoder(nn.Module):
+    def __init__(self, layers: nn.ModuleList):
+        super().__init__()
+        self.layers = layers # we will pass a ModuleList filled with our desinged layers (EncoderBlock in out case) when calling Encoder class
+        self.norm = LayerNormalization()
         
+    def forward(self, x, mask):
+        for layer in self.layers:
+            x = layer(x, mask)
+        return self.norm(x)
+
+
+class DecoderBlock(nn.Module):
+    def __init__(self, self_attention_block: MultiHeadAttentionBlock, cross_attention_block: MultiHeadAttentionBlock, feed_forward_block: FeedForwardBlock, dropout: float) -> None:
+        super().__init__()
+        self.self_attetion_block = self_attention_block
+        self.cross_attention_block = cross_attention_block
+        self.feed_forward_block = feed_forward_block
+        self.residual_connections = nn.ModuleList([ResidualConnection(dropout) for _ in range(3)])
+    
+    def forward(self, x, encoder_output, src_mask, tgt_mask):
+        x = self.residual_connections[0](x, lambda x: self.self_attetion_block(x, x, x, src_mask))
+        # Intuitively, the mask below (src_mask) prevents decoder input from attending to unnecessary part of the encoder output (like padding terms)
+        # Note that value in cross attention is Encoder output, not Decoder input.
+        # We added a layer of information of the relationship between encoder input and decoder input to the encoder input.
+        x = self.residual_connections[1](x, lambda x: self.cross_attention_block(x, encoder_output, encoder_output, src_mask)) 
+        x = self.residual_connections[2](x, self.feed_forward_block)
+        return x
+
+
+class Decoder(nn.Module):
+    def __init__(self, layers: nn.ModuleList) -> None:
+        super().__init__()
+        self.layers = layers
+        self.norm = LayerNormalization()
+        
+    def forward(self, encoder_output, src_mask, tgt_mask):
+        for layer in self.layers:
+            x = layer(x, encoder_output, src_mask, tgt_mask)
+        return self.norm(x)
+
+
+# convert encoder-decoder output to a probability distribution
+class ProjectionLayer(nn.Module):
+    def __init__(self, d_model: int, vocab_size: int) -> None:
+        super().__init__()
+        self.proj = nn.Linear(d_model, vocab_size)
+        
+    def forward(self, x):
+        # (Batch, seq_len, d_model) -> (Batch, seq_len, voacb_size) 
+        # vocab_size vector represents probability distribution
+        # softmax makes probability adds up to one. 
+        # log is for numerical stability as softmax(x) can end up in very small number, but calculating log_softmax directly can avoid that.
+        return torch.log_softmax(self.proj(x), dim = -1)
